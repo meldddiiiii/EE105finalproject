@@ -4,6 +4,51 @@
 #include "MAX86916_eda.h"
 #include <math.h>   // for sqrt, fabs
 
+// --------------------- Compatibility layer for missing DAC API ---------------------
+// This implements the initADAC / setDACGain / setDACpin / setDACVal API your sketch expects
+// by calling the RobTillaart AD5593R library functions underneath.
+
+static AD5593R *adac = nullptr;        // pointer to AD5593R instance
+static uint8_t dacModeMask = 0x00;     // which channels to configure as DAC (bitmask)
+
+void initADAC(uint8_t address, int unused1, int unused2) {
+  // create the AD5593R object and begin communication
+  if (adac) {
+    delete adac;
+    adac = nullptr;
+  }
+  adac = new AD5593R(address, &Wire);
+  // Attempt to start (ignore return here, but user will see I2C failures on runtime if hardware missing)
+  adac->begin();
+  // keep default reference & ranges; user can call setDACGain() next
+}
+
+void setDACGain(int gain) {
+  if (!adac) return;
+  // original code used 'gain' probably as 1 or 2; AD5593R uses setDACRange2x(true/false)
+  if (gain >= 2) adac->setDACRange2x(true);
+  else           adac->setDACRange2x(false);
+}
+
+void setDACpin(int pin) {
+  if (!adac) return;
+  if (pin < 0 || pin > 7) return; // AD5593R has 8 channels 0..7
+  dacModeMask |= (1 << pin);
+  adac->setDACmode(dacModeMask);
+}
+
+void setDACVal(int pin, int value) {
+  if (!adac) return;
+  if (pin < 0 || pin > 7) return;
+  // AD5593R::writeDAC expects 12-bit value (0..4095) - your code uses values within that range
+  // Clip just in case
+  if (value < 0) value = 0;
+  if (value > 0x0FFF) value = 0x0FFF;
+  adac->writeDAC((uint8_t)pin, (uint16_t)value);
+}
+
+// ----------------------------------------------------------------------------------
+
 #define m1_na A0      // Module 1 Network Array
 #define m1_vd A1      // Module 1 Voltage Divider
 #define m2_diode A2   // Module 2 Diode
@@ -171,6 +216,8 @@ bool exit_condition(){
 }
 
 void dac_setup(){
+  // original: initADAC(0x10, 1, 1);
+  // the wrapper initADAC will allocate & begin the AD5593R instance
   initADAC(0x10, 1, 1);
   setDACGain(1);
   setDACpin(dac_diode);
